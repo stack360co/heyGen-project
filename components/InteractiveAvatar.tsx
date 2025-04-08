@@ -18,12 +18,21 @@ import {
   Tabs,
   Tab,
 } from "@nextui-org/react";
+
+import OpenAI from "openai";
+
 import { useEffect, useRef, useState } from "react";
 import { useMemoizedFn, usePrevious } from "ahooks";
 
 import InteractiveAvatarTextInput from "./InteractiveAvatarTextInput";
 
 import {AVATARS, STT_LANGUAGE_LIST} from "@/app/lib/constants";
+
+const client = new OpenAI({
+  apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
+  dangerouslyAllowBrowser: true
+});
+
 
 export default function InteractiveAvatar() {
   const [isLoadingSession, setIsLoadingSession] = useState(false);
@@ -56,6 +65,31 @@ export default function InteractiveAvatar() {
     }
 
     return "";
+  }
+
+  async function generateScript() {
+    try {
+      const prompt = `${text}`;
+
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            "role": "user",
+            "content": prompt
+          }
+        ],
+      });
+
+      const content = completion.choices[0].message.content;
+
+      return content as string
+
+    } catch (error) {
+      console.error("Error generating script:", error);
+
+      return '';
+    }
   }
 
   async function startSession() {
@@ -125,6 +159,9 @@ export default function InteractiveAvatar() {
 
       return;
     }
+
+    // let script = await generateScript();
+
     // speak({ text: text, task_type: TaskType.REPEAT })
     await avatar.current.speak({ text: text, taskType: TaskType.REPEAT, taskMode: TaskMode.SYNC }).catch((e) => {
       setDebug(e.message);
