@@ -1,3 +1,9 @@
+/* eslint-disable react/jsx-sort-props */
+/* eslint-disable padding-line-between-statements */
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable import/order */
+/* eslint-disable no-console */
+/* eslint-disable prettier/prettier */
 import type { StartAvatarResponse } from "@heygen/streaming-avatar";
 
 import StreamingAvatar, {
@@ -42,6 +48,7 @@ export default function InteractiveAvatar() {
   const [knowledgeId, setKnowledgeId] = useState<string>("");
   const [avatarId, setAvatarId] = useState<string>("");
   const [language, setLanguage] = useState<string>('en');
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
 
   const [data, setData] = useState<StartAvatarResponse>();
   const [text, setText] = useState<string>("");
@@ -69,28 +76,53 @@ export default function InteractiveAvatar() {
 
   async function generateScript() {
     try {
-      const prompt = `${text}`;
-
-      const completion = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            "role": "user",
-            "content": prompt
-          }
-        ],
+      if (!activeThreadId) {
+        throw new Error("No active session thread. Please start a session first.");
+      }
+  
+      await client.beta.threads.messages.create(activeThreadId, {
+        role: "user",
+        content: text,
       });
+      
+      if (!process.env.NEXT_PUBLIC_ASSISTANT_ID) {
+        throw new Error("ASSISTANT_ID is not defined in environment variables.");
+      }
 
-      const content = completion.choices[0].message.content;
-
-      return content as string
-
+      const run = await client.beta.threads.runs.create(activeThreadId, {
+        assistant_id: process.env.NEXT_PUBLIC_ASSISTANT_ID,
+      });
+  
+      let runStatus = await client.beta.threads.runs.retrieve(activeThreadId, run.id);
+  
+      while (runStatus.status !== "completed") {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        runStatus = await client.beta.threads.runs.retrieve(activeThreadId, run.id);
+      }
+  
+      const messages = await client.beta.threads.messages.list(activeThreadId);
+  
+      const assistantMessages = messages.data.filter((msg) => msg.role === "assistant");
+  
+      if (assistantMessages.length === 0) {
+        return "No assistant message found.";
+      }
+  
+      const latestAssistantMessage = assistantMessages[0];
+  
+      if (
+        latestAssistantMessage.content.length > 0 &&
+        latestAssistantMessage.content[0].type === "text"
+      ) {
+        return latestAssistantMessage.content[0].text.value;
+      }
+  
+      return "Latest assistant message is not text.";
     } catch (error) {
       console.error("Error generating script:", error);
-
       return '';
     }
-  }
+  }  
 
   async function startSession() {
     setIsLoadingSession(true);
@@ -122,8 +154,11 @@ export default function InteractiveAvatar() {
       setIsUserTalking(false);
     });
     try {
+      const newThread = await client.beta.threads.create();
+      setActiveThreadId(newThread.id);
+
       const res = await avatar.current.createStartAvatar({
-        quality: AvatarQuality.Low,
+        quality: AvatarQuality.High,
         avatarName: avatarId,
         knowledgeId: knowledgeId, // Or use a custom `knowledgeBase`.
         voice: {
@@ -160,10 +195,10 @@ export default function InteractiveAvatar() {
       return;
     }
 
-    // let script = await generateScript();
+    let script = await generateScript();
 
     // speak({ text: text, task_type: TaskType.REPEAT })
-    await avatar.current.speak({ text: text, taskType: TaskType.REPEAT, taskMode: TaskMode.SYNC }).catch((e) => {
+    await avatar.current.speak({ text: script, taskType: TaskType.REPEAT, taskMode: TaskMode.SYNC }).catch((e) => {
       setDebug(e.message);
     });
     setIsLoadingRepeat(false);
@@ -183,6 +218,7 @@ export default function InteractiveAvatar() {
   async function endSession() {
     await avatar.current?.stopAvatar();
     setStream(undefined);
+    setActiveThreadId(null);
   }
 
   const handleChangeChatMode = useMemoizedFn(async (v) => {
